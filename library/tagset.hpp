@@ -10,18 +10,17 @@
 
 namespace ls {
 
-/// One named value within a tagset. ID is a stable monotonic integer
-/// assigned at insertion time and never changes, even on rename.
+/// One named value within a tagset.
+/// The runtime index into tagset::values IS the tag identity — transient, never serialized.
 struct tagset_value {
-    int32_t     id    = 0;
     std::string name;
     uint32_t    color = 0x888888FF; ///< RGBA packed, editor display hint
     uint32_t    glyph = 0;          ///< Unicode codepoint; 0 = no glyph
 };
 
-/// A closed, flat set of named values. Cells in a tag-layer store the integer
-/// ID and interpret it through the tagset bound to that layer.
-/// IDs are 0-based indices into `values` — find(id) is O(1).
+/// A closed, flat set of named values. Cells in a tag-layer store the index
+/// into `values` as a transient runtime identity — never serialized.
+/// find(index) is O(1); find(name) is O(n) over the (small) value list.
 class tagset {
 public:
     std::string               name;

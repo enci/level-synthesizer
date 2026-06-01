@@ -3,22 +3,17 @@
 
 using namespace ls;
 
-TEST_CASE("tagset: add assigns stable monotonic IDs from zero", "[tagset]") {
+TEST_CASE("tagset: add returns the runtime index starting from zero", "[tagset]") {
     tagset ts{"geometry", {}};
-    auto id0 = ts.add("wall");
-    auto id1 = ts.add("floor");
-    auto id2 = ts.add("door");
-
-    REQUIRE(id0 == 0);
-    REQUIRE(id1 == 1);
-    REQUIRE(id2 == 2);
+    REQUIRE(ts.add("wall")  == 0);
+    REQUIRE(ts.add("floor") == 1);
+    REQUIRE(ts.add("door")  == 2);
 }
 
 TEST_CASE("tagset: add rejects duplicate value name", "[tagset]") {
     tagset ts{"geometry", {}};
     ts.add("wall");
-    auto dup = ts.add("wall");
-    REQUIRE_FALSE(dup.has_value());
+    REQUIRE_FALSE(ts.add("wall").has_value());
     REQUIRE(ts.values.size() == 1);
 }
 
@@ -29,7 +24,6 @@ TEST_CASE("tagset: find by name returns correct value", "[tagset]") {
 
     auto* v = ts.find("chest");
     REQUIRE(v != nullptr);
-    REQUIRE(v->id    == 0);
     REQUIRE(v->color == 0xFF0000FF);
     REQUIRE(v->glyph == 0x1F4E6);
 
@@ -37,7 +31,7 @@ TEST_CASE("tagset: find by name returns correct value", "[tagset]") {
     REQUIRE(ts.find("potion") == nullptr);
 }
 
-TEST_CASE("tagset: find by id is O(1) index lookup", "[tagset]") {
+TEST_CASE("tagset: find by index is O(1) lookup", "[tagset]") {
     tagset ts{"geometry", {}};
     ts.add("wall");
     ts.add("floor");
@@ -50,37 +44,49 @@ TEST_CASE("tagset: find by id is O(1) index lookup", "[tagset]") {
     REQUIRE(ts.find(-1) == nullptr);
 }
 
-TEST_CASE("tagset: ID is stable — stays equal to index after multiple adds", "[tagset]") {
+TEST_CASE("tagset: index equals position in values vector", "[tagset]") {
     tagset ts{"enemies", {}};
     for (auto name : {"goblin", "troll", "dragon", "lich"})
         ts.add(name);
 
     for (int i = 0; i < static_cast<int>(ts.values.size()); ++i)
-        REQUIRE(ts.values[i].id == i);
+        REQUIRE(ts.find(i)->name == ts.values[i].name);
 }
 
-TEST_CASE("tagset: default color applied when not specified", "[tagset]") {
+TEST_CASE("tagset: default color and glyph applied when not specified", "[tagset]") {
     tagset ts{"geometry", {}};
     ts.add("wall");
     REQUIRE(ts.find("wall")->color == 0x888888FF);
     REQUIRE(ts.find("wall")->glyph == 0);
 }
 
-TEST_CASE("tagset: round-trip JSON preserves all fields", "[tagset]") {
+TEST_CASE("tagset: JSON round-trip preserves names, colors, glyphs — no id field", "[tagset]") {
     tagset ts{"geometry", {}};
     ts.add("wall",  0xFF0000FF, 0x2588);
     ts.add("floor", 0x00FF00FF, 0x00B7);
 
-    auto restored = tagset::from_json(ts.to_json());
+    auto j = ts.to_json();
 
+    REQUIRE_FALSE(j["values"][0].contains("id"));
+    REQUIRE(j["values"][0]["name"]  == "wall");
+    REQUIRE(j["values"][0]["color"] == "#ff0000ff");
+    REQUIRE(j["values"][0]["glyph"] == "U+2588");
+
+    auto restored = tagset::from_json(j);
     REQUIRE(restored.name == ts.name);
     REQUIRE(restored.values.size() == ts.values.size());
     for (size_t i = 0; i < ts.values.size(); ++i) {
-        REQUIRE(restored.values[i].id    == ts.values[i].id);
         REQUIRE(restored.values[i].name  == ts.values[i].name);
         REQUIRE(restored.values[i].color == ts.values[i].color);
         REQUIRE(restored.values[i].glyph == ts.values[i].glyph);
     }
+}
+
+TEST_CASE("tagset: glyph zero serializes as empty string", "[tagset]") {
+    tagset ts{"geometry", {}};
+    ts.add("wall");
+    auto j = ts.to_json();
+    REQUIRE(j["values"][0]["glyph"] == "");
 }
 
 TEST_CASE("tagset_registry: add creates a new empty tagset", "[tagset_registry]") {
@@ -102,12 +108,12 @@ TEST_CASE("tagset_registry: same value name in different tagsets is fine", "[tag
     reg.add("geometry");
     reg.add("items");
 
-    auto geo_id   = reg.find("geometry")->add("sword");
-    auto items_id = reg.find("items")->add("sword");
+    auto geo_idx   = reg.find("geometry")->add("sword");
+    auto items_idx = reg.find("items")->add("sword");
 
-    REQUIRE(geo_id.has_value());
-    REQUIRE(items_id.has_value());
-    REQUIRE(geo_id == items_id);  // both get ID 0 — independent per-tagset
+    REQUIRE(geo_idx.has_value());
+    REQUIRE(items_idx.has_value());
+    REQUIRE(geo_idx == items_idx);  // both index 0 — independent per-tagset
 }
 
 TEST_CASE("tagset_registry: find returns correct tagset", "[tagset_registry]") {
@@ -129,7 +135,7 @@ TEST_CASE("tagset_registry: find is const-correct", "[tagset_registry]") {
     REQUIRE(creg.find("missing")  == nullptr);
 }
 
-TEST_CASE("tagset_registry: round-trip JSON preserves all tagsets and values", "[tagset_registry]") {
+TEST_CASE("tagset_registry: JSON round-trip preserves all tagsets and values", "[tagset_registry]") {
     tagset_registry reg;
     reg.add("geometry");
     reg.find("geometry")->add("wall",  0xFF0000FF, 0x2588);
@@ -141,12 +147,7 @@ TEST_CASE("tagset_registry: round-trip JSON preserves all tagsets and values", "
 
     REQUIRE(restored.tagsets.size() == 2);
     auto* rg = restored.find("geometry");
-    REQUIRE(rg != nullptr);
-    REQUIRE(rg->values.size() == 2);
     REQUIRE(rg->find("wall")->glyph  == 0x2588);
     REQUIRE(rg->find("floor")->color == 0x00FF00FF);
-
-    auto* ri = restored.find("items");
-    REQUIRE(ri != nullptr);
-    REQUIRE(ri->find("chest")->color == 0xFFD700FF);
+    REQUIRE(restored.find("items")->find("chest")->color == 0xFFD700FF);
 }

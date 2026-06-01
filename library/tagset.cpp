@@ -1,17 +1,45 @@
 #include "tagset.hpp"
 
 #include <algorithm>
+#include <cstdio>
 
 namespace ls {
+
+namespace {
+    std::string color_to_string(uint32_t color) {
+        char buf[10];
+        std::snprintf(buf, sizeof(buf), "#%08x", color);
+        return buf;
+    }
+
+    uint32_t color_from_string(std::string_view s) {
+        if (s.size() == 9 && s[0] == '#')
+            return static_cast<uint32_t>(std::stoul(std::string(s.substr(1)), nullptr, 16));
+        return 0x888888FF;
+    }
+
+    std::string glyph_to_string(uint32_t glyph) {
+        if (glyph == 0) return "";
+        char buf[12];
+        std::snprintf(buf, sizeof(buf), "U+%04X", glyph);
+        return buf;
+    }
+
+    uint32_t glyph_from_string(std::string_view s) {
+        if (s.size() > 2 && s[0] == 'U' && s[1] == '+')
+            return static_cast<uint32_t>(std::stoul(std::string(s.substr(2)), nullptr, 16));
+        return 0;
+    }
+}
 
 std::optional<int32_t> tagset::add(std::string_view value_name,
                                    uint32_t color,
                                    uint32_t glyph) {
     if (find(value_name))
         return std::nullopt;
-    int32_t id = static_cast<int32_t>(values.size());
-    values.push_back({id, std::string(value_name), color, glyph});
-    return id;
+    int32_t index = static_cast<int32_t>(values.size());
+    values.push_back({std::string(value_name), color, glyph});
+    return index;
 }
 
 const tagset_value* tagset::find(std::string_view value_name) const {
@@ -30,8 +58,9 @@ const tagset_value* tagset::find(int32_t id) const {
 nlohmann::json tagset::to_json() const {
     nlohmann::json arr = nlohmann::json::array();
     for (auto& v : values)
-        arr.push_back({{"id", v.id}, {"name", v.name},
-                       {"color", v.color}, {"glyph", v.glyph}});
+        arr.push_back({{"name",  v.name},
+                       {"color", color_to_string(v.color)},
+                       {"glyph", glyph_to_string(v.glyph)}});
     return {{"name", name}, {"values", arr}};
 }
 
@@ -40,10 +69,9 @@ tagset tagset::from_json(const nlohmann::json& j) {
     ts.name = j.at("name").get<std::string>();
     for (auto& jv : j.at("values")) {
         tagset_value v;
-        v.id    = jv.at("id").get<int32_t>();
         v.name  = jv.at("name").get<std::string>();
-        v.color = jv.at("color").get<uint32_t>();
-        v.glyph = jv.at("glyph").get<uint32_t>();
+        v.color = color_from_string(jv.at("color").get<std::string>());
+        v.glyph = glyph_from_string(jv.at("glyph").get<std::string>());
         ts.values.push_back(v);
     }
     return ts;

@@ -92,10 +92,13 @@ named, and typed once; the cell can collapse to a small integer interpreted
 
 Consequences (each dissolves a LevelSynth hazard):
 
-- **No hashing.** Closed, small, declared tagsets get **stable monotonic
-  integer IDs within their tagset**. Cells store the ID. Renaming a value
-  touches zero cells — the remap sweep that bit us before *cannot happen*,
-  because the string was never the key.
+- **No hashing, no persisted IDs.** Closed, small, declared tagsets get
+  **dense indices within their tagset, recomputed at `compile()` from array
+  order**. Cells store the index; the index lives only for the run. The
+  remap sweep that bit us before *cannot happen* — not because IDs are stable,
+  but because **nothing durable stores a tag ID at all** (grids are derived from
+  seed + pipeline + registry, never saved; see §4a). Renaming is free, reorder
+  is cosmetic, no monotonic counter to keep consistent across undo.
 - **No within-value hierarchy in v1.** "Match anything" lives in the pattern
   token (`.`), not in the tag value. Don't re-import the three 21-bit levels.
   A future "match any enemy" is a tagset feature, added when needed.
@@ -103,10 +106,82 @@ Consequences (each dissolves a LevelSynth hazard):
   because lookup is layer → tagset → value, never global.
 
 **Tagset registry** is a separate object from the layer stack: it owns
-ID↔name↔color↔glyph for each tagset (the vocabulary). The layer stack owns the
+name↔color↔glyph for each tag value (the vocabulary). The layer stack owns the
 *content*. Both serialize together. Glyphs/colors carry over from MGSL §6 as the
 cell-painting palette; the textual glyph alias (`wall █`) is only an
 export/interop nicety, since in a visual editor you *paint* the cell.
+
+### 4a. Tag identity & serialization — resolved
+
+The frame to drop is LevelSynth's "renaming must touch zero *cells*." That
+guarantee only matters if cells are **durable**. Here they are not: grids are
+**derived** (seed + pipeline + registry → grids, deterministically, §7.2). We
+save the *recipe*, not the result, and regenerate. So a cell's tag ID exists
+only between `compile()` and end-of-run, then is discarded. "Stable across
+save/load" is meaningless for a value that never crosses a save.
+
+The clean split: **durable tag storage is by name; transient tag storage is by
+index; they meet only at `compile()`.**
+
+- **Durable, by name.** Patterns (in the rewrite transform) store tag
+  *references by name* — `geometry.wall`, never an integer. Layer→tagset binding
+  is a name (§7). These are few, authored, and human-stable.
+- **Transient, by index.** Runtime grids store the resolved **index** into the
+  tagset's value vector. Dense (`0..N-1`), so they pack into the smallest int
+  holding N — the seam for a future `uint16` tag grid + SIMD, with no compaction
+  (indices stay dense; a never-reused monotonic ID would not). Live only for the
+  run; never serialized.
+- **They meet at `compile()`.** Name references resolve to indices against the
+  current registry. **Stop-and-error on an unresolved name** ("rule X references
+  geometry.wall, which no longer exists") — loud failure, no silent corruption.
+
+Why no monotonic `next_id` counter (considered and rejected): a counter is
+*mutable state that participates in undo* — undo an add, does it roll back? redo?
+You'd snapshot it into every history entry and reason about reuse-after-undo. A
+plain value vector has none of that: undo restores the vector, indices fall out
+of position. The counter was a second source of truth to keep consistent with
+the vector across history; deleting it deletes that obligation. (This is §2
+subtraction: the counter defended "stable IDs," an invariant the derived-grid
+model makes unnecessary.)
+
+What a tagset serializes to — note **no `id`, no `next_id`**:
+
+```jsonc
+{
+  "name": "geometry",
+  "values": [
+    { "name": "wall",  "color": "#3a3a3a", "glyph": "U+2588" },
+    { "name": "floor", "color": "#c8c8c8", "glyph": "U+00B7" }
+  ]
+}
+```
+
+**The project save is four things, no grid contents anywhere:**
+
+1. **tagset registry** — tagsets as above.
+2. **layer declarations** — name, kind, tagset-name (the binding; §7). *Not* cell
+   values.
+3. **pipeline** — ordered transforms via each transform's `save()` (§6).
+4. **seed**.
+
+Load → `evaluate()` → grids appear. Because no durable artifact stores a tag ID,
+rename is free and reorder is purely cosmetic.
+
+Two invariants this creates, stated so they don't bite:
+
+- **An edit that changes `compile()` invalidates the timeline (§11).** Timeline
+  snapshots hold indices valid only under the registry/pipeline that produced
+  them; adding/removing/reordering a tag or editing the pipeline means re-run.
+  Fine — the timeline is a debug artifact of one specific run, never serialized.
+- **No tagset or pipeline edits during execution.** `compile()` builds the
+  name→index map once; all transforms in a run share it. The editor gates this
+  naturally (edit, then run). An invariant the engine *assumes*, not one it
+  checks mid-loop.
+
+> Practical ceiling: >~100 values in one tagset is already a design smell, so the
+> dense-index space is never under pressure; `uint16` covers a project lifetime
+> with room to spare even before considering that indices are recomputed, not
+> accumulated.
 
 ## 5. The grid and the cell — resolved
 
@@ -119,6 +194,13 @@ design intent was a template on `std::integral`; its source used a concrete
 "Arithmetic on a tag grid is nonsense" is enforced at the *transform* level (a
 numeric transform checks its target layer's kind and refuses a tag layer), not
 by a cell type the matcher would have to be generic over.
+
+> **Where "which grid is tag vs number, and which tagset" lives:** *not here.*
+> The grid is deliberately ignorant of cell meaning — that's the §4 resolution.
+> The binding (`kind` + `tagset` name) sits on the `layer` record in §7. A number
+> grid is `kind == number_grid` with an empty `tagset`. The binding is by **name**
+> (you can't serialize a pointer), resolved lazily for display/authoring; the
+> matcher never needs it (it compares indices). See §4a.
 
 ### Empty — via an occupancy bitplane, uniform across all grids
 
@@ -264,8 +346,8 @@ struct layer_stack {
 Three points, each a prior decision cashing out:
 
 - **Tagset binding on the layer, not the cell** — the §4 resolution in code. Cell
-  is a bare ID; layer says which tagset reads it; the tagset registry (separate
-  object) owns ID↔name↔color↔glyph.
+  is a bare index (transient; §4a); layer says which tagset reads it via a tagset
+  *name*; the tagset registry (separate object) owns name↔color↔glyph per value.
 - **Linear scan, not a name→index map.** Five-ish layers; building the map is the
   exact premature abstraction LevelSynth §9 warns against.
 - **The runtime never does name lookup.** A rule references grids by name
