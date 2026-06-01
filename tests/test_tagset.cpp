@@ -3,10 +3,6 @@
 
 using namespace ls;
 
-// ---------------------------------------------------------------------------
-// tagset
-// ---------------------------------------------------------------------------
-
 TEST_CASE("tagset: add assigns stable monotonic IDs from zero", "[tagset]") {
     tagset ts{"geometry", {}};
     auto id0 = ts.add("wall");
@@ -37,7 +33,7 @@ TEST_CASE("tagset: find by name returns correct value", "[tagset]") {
     REQUIRE(v->color == 0xFF0000FF);
     REQUIRE(v->glyph == 0x1F4E6);
 
-    REQUIRE(ts.find("sword") != nullptr);
+    REQUIRE(ts.find("sword")  != nullptr);
     REQUIRE(ts.find("potion") == nullptr);
 }
 
@@ -87,32 +83,27 @@ TEST_CASE("tagset: round-trip JSON preserves all fields", "[tagset]") {
     }
 }
 
-// ---------------------------------------------------------------------------
-// tagset_registry
-// ---------------------------------------------------------------------------
-
 TEST_CASE("tagset_registry: add creates a new empty tagset", "[tagset_registry]") {
     tagset_registry reg;
-    auto* ts = reg.add("geometry");
-    REQUIRE(ts != nullptr);
-    REQUIRE(ts->name == "geometry");
-    REQUIRE(ts->values.empty());
+    REQUIRE(reg.add("geometry"));
+    REQUIRE(reg.find("geometry") != nullptr);
+    REQUIRE(reg.find("geometry")->values.empty());
 }
 
 TEST_CASE("tagset_registry: add rejects duplicate tagset name", "[tagset_registry]") {
     tagset_registry reg;
     reg.add("geometry");
-    REQUIRE(reg.add("geometry") == nullptr);
+    REQUIRE_FALSE(reg.add("geometry"));
     REQUIRE(reg.tagsets.size() == 1);
 }
 
 TEST_CASE("tagset_registry: same value name in different tagsets is fine", "[tagset_registry]") {
     tagset_registry reg;
-    auto* geo   = reg.add("geometry");
-    auto* items = reg.add("items");
+    reg.add("geometry");
+    reg.add("items");
 
-    auto geo_id   = geo->add("sword");    // geometry[sword]
-    auto items_id = items->add("sword");  // items[sword]
+    auto geo_id   = reg.find("geometry")->add("sword");
+    auto items_id = reg.find("items")->add("sword");
 
     REQUIRE(geo_id.has_value());
     REQUIRE(items_id.has_value());
@@ -140,11 +131,11 @@ TEST_CASE("tagset_registry: find is const-correct", "[tagset_registry]") {
 
 TEST_CASE("tagset_registry: round-trip JSON preserves all tagsets and values", "[tagset_registry]") {
     tagset_registry reg;
-    auto* geo = reg.add("geometry");
-    geo->add("wall",  0xFF0000FF, 0x2588);
-    geo->add("floor", 0x00FF00FF, 0x00B7);
-    auto* items = reg.add("items");
-    items->add("chest", 0xFFD700FF, 0);
+    reg.add("geometry");
+    reg.find("geometry")->add("wall",  0xFF0000FF, 0x2588);
+    reg.find("geometry")->add("floor", 0x00FF00FF, 0x00B7);
+    reg.add("items");
+    reg.find("items")->add("chest", 0xFFD700FF, 0);
 
     auto restored = tagset_registry::from_json(reg.to_json());
 
@@ -158,20 +149,4 @@ TEST_CASE("tagset_registry: round-trip JSON preserves all tagsets and values", "
     auto* ri = restored.find("items");
     REQUIRE(ri != nullptr);
     REQUIRE(ri->find("chest")->color == 0xFFD700FF);
-}
-
-TEST_CASE("tagset_registry: pointer from add stays valid across subsequent adds", "[tagset_registry]") {
-    tagset_registry reg;
-    auto* geo = reg.add("geometry");
-    geo->add("wall");
-
-    // Adding more tagsets must not invalidate `geo`.
-    // (vector reallocation would break this if we stored pointers to elements carelessly.)
-    for (int i = 0; i < 10; ++i)
-        reg.add("ts_" + std::to_string(i));
-
-    // Re-find rather than use potentially-dangling `geo`.
-    auto* refound = reg.find("geometry");
-    REQUIRE(refound != nullptr);
-    REQUIRE(refound->find("wall") != nullptr);
 }
