@@ -9,7 +9,8 @@ namespace ls {
 ///   1. occupancy      — per-grid, serialized, persistent
 ///   2. overlap mask   — per-statement, transient (clear_all before lending)
 ///   3. snapshot dirty-set — deferred, not in v1
-struct bit_plane {
+class bit_plane {
+public:
     int w = 0;
     int h = 0;
     std::vector<uint64_t> words; ///< ceil(w*h / 64) packed words
@@ -28,8 +29,9 @@ private:
 
 /// Dense 2D grid of int64 values with a parallel occupancy bitplane.
 /// Empty is not a sentinel value — it is tracked by the bitplane.
-/// `values` and `occupied` MUST stay co-sized; only this struct's own mutators touch them.
-struct grid {
+/// `values` and `occupied` MUST stay co-sized; only this class's own mutators touch them.
+class grid {
+public:
     int w = 0;
     int h = 0;
     std::vector<int64_t> values;  ///< any bit pattern is legal; only valid where !empty()
